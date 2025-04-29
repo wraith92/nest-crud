@@ -3,36 +3,51 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Installation explicite de npm (nécessaire sur alpine)
-RUN apk add --no-cache npm
+# 1. Installer les dépendances système pour Prisma
+RUN apk add --no-cache git python3 make g++ openssl
 
-# D'abord copier les fichiers de dépendances
+# 2. Copier les fichiers de configuration
 COPY package*.json ./
+COPY tsconfig*.json ./
+COPY nest-cli.json ./
+COPY prisma/schema.prisma ./prisma/
 
-# Installation des dépendances (y compris devDependencies pour la construction)
-RUN npm install
+# 3. Installer les dépendances
+RUN npm install --include=dev
 
-# Puis copier le reste du code
+# 4. Générer le client Prisma
+RUN npx prisma generate
+
+# 5. Copier le reste du code
 COPY . .
 
-# Vérification que le script build existe
-RUN npm ls --depth=0 && \
-    npm run build --if-present || echo "Build script not found"
+# 6. Builder l'application
+RUN npm run build
 
-# Étape d'exécution
+# Étape de production
 FROM node:18-alpine
 
 WORKDIR /app
 
-# Installation de npm pour l'image finale
-RUN apk add --no-cache npm
+# 1. Dépendances runtime pour Prisma
+RUN apk add --no-cache openssl
 
+# 2. Copier les artefacts de construction
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/prisma ./prisma
 
+# 3. Régénérer le client Prisma pour l'environnement de production
+RUN npx prisma generate
+
+# 4. Configuration Render.com
 ENV NODE_ENV=production
 ENV PORT=10000
+ENV DATABASE_URL=${DATABASE_URL}
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:$PORT/health || exit 1
 
 EXPOSE 10000
 
